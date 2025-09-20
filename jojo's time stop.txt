@@ -1,0 +1,291 @@
+--[[
+====================
+TIME STOP SCRIPT
+(Place this code into a Lua executor)
+====================
+
+This is a self-contained, client-side ability.
+It handles all visual effects, sounds, and animations locally for a smooth experience.
+
+Press 'F' to stop and resume time.
+Press 'V' to teleport.
+--]]
+
+-- Services --
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+-- Player variables
+local localPlayer = Players.LocalPlayer
+local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
+local head = character:WaitForChild("Head")
+local torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
+local rootPart = character:WaitForChild("HumanoidRootPart")
+local humanoid = character:WaitForChild("Humanoid")
+local mouse = localPlayer:GetMouse()
+
+-- General variables
+local isTimeStopped = false
+local frozenObjects = {}
+local standModel = nil
+local isPosePlaying = false
+local seconds = 10 -- Duration of the time stop
+local runloopConnection = nil
+
+-- Animation variables
+local poseAnimationId = "rbxassetid://507765108"
+local poseAnimation = nil
+local poseTrack = nil
+
+-- Time Stop Effects --
+local timeStopEffect = Instance.new("ColorCorrectionEffect")
+timeStopEffect.Parent = Lighting
+timeStopEffect.Saturation = 0
+timeStopEffect.Contrast = 0
+timeStopEffect.Enabled = false
+
+-- Sound effects and voicelines
+local timeStopVoiceline = Instance.new("Sound")
+timeStopVoiceline.SoundId = "rbxassetid://5940960809"
+timeStopVoiceline.Volume = 5
+
+local injuredTimeStopVoiceline = Instance.new("Sound")
+injuredTimeStopVoiceline.SoundId = "rbxassetid://6043864223"
+injuredTimeStopVoiceline.Volume = 5
+
+local tssfx = Instance.new("Sound")
+tssfx.SoundId = "rbxassetid://5679636294"
+tssfx.Volume = 5
+
+local timeResumeVoiceline = Instance.new("Sound")
+timeResumeVoiceline.SoundId = "rbxassetid://6408655200"
+timeResumeVoiceline.Volume = 5
+
+local injuredTimeResumeVoiceline = Instance.new("Sound")
+injuredTimeResumeVoiceline.SoundId = "rbxassetid://6043853981"
+injuredTimeResumeVoiceline.Volume = 5
+
+local tsTeleportSFX = Instance.new("Sound")
+tsTeleportSFX.SoundId = "rbxassetid://3077287610"
+tsTeleportSFX.Volume = 4.5
+
+local clock = Instance.new("Sound", workspace)
+clock.SoundId = "rbxassetid://4940109913"
+clock.Volume = 4.5
+clock.Looped = true
+
+-- Function to create the Stand model (The World)
+local function createStand()
+    local stand = Instance.new("Model")
+    stand.Name = "TheWorld"
+    stand.Parent = workspace
+    
+    local standRoot = Instance.new("Part")
+    standRoot.Name = "StandRoot"
+    standRoot.Size = Vector3.new(1, 1, 1)
+    standRoot.Transparency = 1
+    standRoot.Anchored = true
+    standRoot.CanCollide = false
+    standRoot.Parent = stand
+    stand.PrimaryPart = standRoot
+    
+    local bodyPart = Instance.new("Part")
+    bodyPart.Name = "Body"
+    bodyPart.Size = Vector3.new(2, 4, 1.5)
+    bodyPart.Shape = Enum.PartType.Cylinder
+    bodyPart.Color = Color3.new(1, 1, 0)
+    bodyPart.Anchored = true
+    bodyPart.CanCollide = false
+    bodyPart.Material = Enum.Material.ForceField
+    bodyPart.Parent = stand
+
+    local headPart = Instance.new("Part")
+    headPart.Name = "Head"
+    headPart.Size = Vector3.new(2, 2, 2)
+    headPart.Shape = Enum.PartType.Ball
+    headPart.Color = Color3.new(1, 1, 0)
+    headPart.Anchored = true
+    headPart.CanCollide = false
+    headPart.Material = Enum.Material.ForceField
+    headPart.Parent = stand
+    
+    local bodyWeld = Instance.new("WeldConstraint")
+    bodyWeld.Part0 = standRoot
+    bodyWeld.Part1 = bodyPart
+    bodyWeld.Parent = bodyPart
+    
+    local headWeld = Instance.new("WeldConstraint")
+    headWeld.Part0 = bodyPart
+    headWeld.Part1 = headPart
+    headWeld.Parent = headPart
+    
+    bodyPart.CFrame = standRoot.CFrame
+    headPart.CFrame = bodyPart.CFrame * CFrame.new(0, 3, 0)
+
+    local standAura = Instance.new("ParticleEmitter")
+    standAura.Parent = standRoot
+    standAura.Color = ColorSequence.new(Color3.new(1, 1, 0), Color3.new(1, 0.5, 0))
+    standAura.LightInfluence = 0
+    standAura.Brightness = 5
+    standAura.Lifetime = NumberRange.new(0.5, 1.5)
+    standAura.Size = NumberSequence.new(1, 0.5)
+    standAura.Speed = NumberRange.new(5, 10)
+    standAura.Texture = "rbxassetid://4630560244"
+    standAura.Rate = 50
+    standAura.Enabled = false
+
+    return stand
+end
+
+local function onCharacterAdded(newChar)
+    character = newChar
+    head = character:WaitForChild("Head")
+    torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
+    rootPart = character:WaitForChild("HumanoidRootPart")
+    humanoid = character:WaitForChild("Humanoid")
+    
+    poseAnimation = Instance.new("Animation")
+    poseAnimation.AnimationId = poseAnimationId
+    poseTrack = humanoid:LoadAnimation(poseAnimation)
+    poseTrack.Priority = Enum.AnimationPriority.Action
+
+    timeStopVoiceline.Parent = head
+    injuredTimeStopVoiceline.Parent = head
+    tssfx.Parent = head
+    timeResumeVoiceline.Parent = head
+    injuredTimeResumeVoiceline.Parent = head
+    tsTeleportSFX.Parent = torso
+
+    if standModel then
+        standModel:Destroy()
+    end
+    standModel = createStand()
+end
+
+onCharacterAdded(localPlayer.Character or localPlayer.CharacterAdded:Wait())
+localPlayer.CharacterAdded:Connect(onCharacterAdded)
+
+local function timeStop()
+    if isTimeStopped then return end
+    isTimeStopped = true
+
+    if humanoid.Health < 50 then
+        injuredTimeStopVoiceline:Play()
+        task.wait(1)
+        tssfx:Play()
+    else
+        timeStopVoiceline:Play()
+        task.wait(1.6)
+    end
+    
+    if humanoid.MoveDirection.Magnitude == 0 then
+        poseTrack:Play()
+        isPosePlaying = true
+    end
+
+    local standAura = standModel.StandRoot:FindFirstChild("ParticleEmitter")
+    if standAura then
+        standAura.Enabled = true
+    end
+    
+    for _, part in ipairs(standModel:GetChildren()) do
+        if part:IsA("BasePart") and part.Name ~= "StandRoot" then
+            part.Transparency = 0
+        end
+    end
+
+    local offset = 0
+    runloopConnection = RunService.Heartbeat:Connect(function()
+        if not isTimeStopped then runloopConnection:Disconnect(); return end
+        offset = offset + 0.05
+        local standCFrame = rootPart.CFrame * CFrame.new(3, 0, 0) * CFrame.Angles(0, math.rad(-90), 0)
+        local animatedCFrame = standCFrame * CFrame.new(0, math.sin(offset) * 0.5, 0) * CFrame.Angles(0, offset * 0.1, 0)
+        standModel:SetPrimaryPartCFrame(animatedCFrame)
+    end)
+    
+    -- Now we correctly store the parts we freeze
+    for _, child in ipairs(workspace:GetDescendants()) do
+        if child:IsA("BasePart") and child.Anchored == false and not child:IsDescendantOf(character) then
+            child.Anchored = true
+            table.insert(frozenObjects, child)
+        end
+    end
+    
+    timeStopEffect.Enabled = true
+    timeStopEffect.Saturation = -1
+    timeStopEffect.Contrast = 0
+    
+    TweenService:Create(workspace.CurrentCamera, TweenInfo.new(1.5, Enum.EasingStyle.Exponential), {FieldOfView = 250}):Play()
+    task.wait(1.7)
+    TweenService:Create(workspace.CurrentCamera, TweenInfo.new(1, Enum.EasingStyle.Quart), {FieldOfView = 70}):Play()
+    
+    task.wait(seconds)
+    timeResume()
+end
+
+local function timeResume()
+    if not isTimeStopped then return end
+    isTimeStopped = false
+
+    if isPosePlaying then
+        poseTrack:Stop()
+        isPosePlaying = false
+    end
+
+    if humanoid.Health < 50 then
+        injuredTimeResumeVoiceline:Play()
+        task.wait(0.6)
+    else
+        timeResumeVoiceline:Play()
+        task.wait(0.9)
+    end
+
+    -- We now iterate through the frozenObjects table to unfreeze them.
+    for _, part in ipairs(frozenObjects) do
+        if part.Parent then
+            part.Anchored = false
+        end
+    end
+    frozenObjects = {}
+    
+    local standAura = standModel.StandRoot:FindFirstChild("ParticleEmitter")
+    if standAura then
+        standAura.Enabled = false
+    end
+    
+    for _, part in ipairs(standModel:GetChildren()) do
+        if part:IsA("BasePart") then
+            part.Transparency = 1
+        end
+    end
+    
+    timeStopEffect.Enabled = false
+end
+
+local function tsTeleport()
+    if isTimeStopped then return end
+    
+    local targetPosition = mouse.Hit.p
+    local character = localPlayer.Character
+    if character and character:FindFirstChild("HumanoidRootPart") then
+        character.HumanoidRootPart.CFrame = CFrame.new(targetPosition.X, targetPosition.Y + 2, targetPosition.Z)
+        tsTeleportSFX:Play()
+    end
+end
+
+UserInputService.InputBegan:Connect(function(inputObject, gameProcessed)
+    if gameProcessed then return end
+    
+    if inputObject.KeyCode == Enum.KeyCode.F then
+        if isTimeStopped then
+            timeResume()
+        else
+            timeStop()
+        end
+    elseif inputObject.KeyCode == Enum.KeyCode.V then
+        tsTeleport()
+    end
+end)
