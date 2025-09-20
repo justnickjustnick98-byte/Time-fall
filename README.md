@@ -1,4 +1,4 @@
-Copy the Code: Highlight and copy the entire script code from time-fall.
+Copy the Code: Highlight and copy the entire script code from jojo's time stop TXT.
 
 Open Your Executor: Launch your preferred Roblox executor (e.g., Synapse X, Script-Ware, KRNL).
 
